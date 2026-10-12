@@ -5,29 +5,24 @@ to Spotify's login, which redirects to the app's Redirect URI (http://127.0.0.1:
 Nothing answers there, but the failed page's address contains the authorization code; the user
 pastes that address back into the Presto's page, and the Presto trades the code for a new
 refresh token.
+
+If secrets.py has no Client ID and Secret, or Spotify rejects the ones saved earlier, the page
+asks for them first. They are saved together with the refresh token.
 """
 import os
 import uasyncio as asyncio
 
+import http_page
 from applications.spotify.spotify_client import NO_LOGIN, unquote, urlencode
+from http_page import escape as _escape, form_value as _form_value
 
 AUTHORIZE_URL = "https://accounts.spotify.com/authorize"
 SCOPES = "user-read-playback-state user-modify-playback-state user-read-recently-played"
 HTTP_PORT = 80
 
-_PAGE = """<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PrestoDeck Spotify login</title>
-<style>
-body{{font-family:system-ui,sans-serif;max-width:32em;margin:0 auto;padding:16px;background:#121212;color:#eee;line-height:1.45}}
-h1{{font-size:1.3em}} .err{{background:#5a1d1d;padding:10px;border-radius:6px}} .ok{{background:#1d4a2a;padding:10px;border-radius:6px}}
-a.btn,button{{display:inline-block;background:#1db954;color:#000;font-weight:600;font-size:1em;padding:12px 18px;border:0;border-radius:24px;text-decoration:none}}
-textarea{{width:100%;box-sizing:border-box;height:7em;font-size:.9em;background:#222;color:#eee;border:1px solid #555;border-radius:6px;padding:8px}}
-ol li{{margin-bottom:1.2em}} small{{color:#aaa}}
-</style></head><body>
-<h1>PrestoDeck: Spotify login</h1>
-{body}
-</body></html>"""
+
+def _page(body):
+    return http_page.page("Spotify login", body)
 
 _FORM = """{message}
 <ol>
@@ -42,7 +37,19 @@ Copy the <b>whole address</b> from the address bar. It starts with <code>{redire
 </form></li>
 </ol>
 <small>The address works only once and expires about 10 minutes after you tap Agree.
-If it fails, start again from step 1.</small>"""
+If it fails, start again from step 1.</small>{change_app}"""
+
+_CHANGE_APP = """<p><small><a href="/app" style="color:#aaa">Use a different Spotify app</a></small></p>"""
+
+_APP_FORM = """{message}
+<p>In the <a href="https://developer.spotify.com/dashboard" target="_blank" style="color:#1db954">Spotify developer dashboard</a>,
+create an app with the Redirect URI <code>{redirect_uri}</code> and the <b>Web API</b> box ticked.
+Then copy its <b>Client ID</b> and <b>Client Secret</b> from the app's settings.</p>
+<form method="post" action="/app">
+Client ID<br><input name="client_id" value="{client_id}" autocomplete="off" required><br><br>
+Client Secret<br><input name="client_secret" value="{client_secret}" autocomplete="off" required><br><br>
+<button type="submit">Next</button>
+</form>"""
 
 _DONE = """<p class="ok">Logged in. The Presto is starting the player, so you can close this page.</p>"""
 
@@ -79,58 +86,77 @@ class Relogin:
         print("Re-login page stopped")
 
     async def _handle(self, reader, writer):
-        try:
-            request_line = (await reader.readline()).decode()
-            parts = request_line.split(' ')
-            method, path = (parts[0], parts[1]) if len(parts) >= 2 else ('', '')
-            length = 0
-            while True:
-                line = await reader.readline()
-                if not line or line == b'\r\n':
-                    break
-                name, _, value = line.decode().partition(':')
-                if name.strip().lower() == 'content-length':
-                    length = int(value.strip())
-            body = (await reader.readexactly(length)).decode() if length else ''
-
-            if method == 'GET' and path == '/':
-                status, html = '200 OK', self._form_page()
-            elif method == 'POST' and path == '/submit':
-                status, html = '200 OK', await self._submit(_form_value(body, 'address'))
-            else:
-                status, html = '404 Not Found', _PAGE.format(body='<p>Not found. <a href="/">Back</a></p>')
-
-            data = html.encode()
-            writer.write('HTTP/1.0 {}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n'
-                         'Connection: close\r\n\r\n'.format(status, len(data)).encode())
-            writer.write(data)
-            await writer.drain()
-        except Exception as e:
-            print("Re-login request failed:", e)
-        finally:
-            writer.close()
-            await writer.wait_closed()
-
+        await http_page.handle(reader, writer, self._route)
         if self.done and not self._success_reported:
             self._success_reported = True
             self.on_success()
 
-    def _form_page(self, error=None):
+    async def _route(self, method, path, body):
+        if method == 'GET' and path == '/':
+            return '200 OK', self._start_page()
+        if method == 'GET' and path == '/app' and not self.session.client_in_secrets:
+            return '200 OK', self._app_page()
+        if method == 'POST' and path == '/app' and not self.session.client_in_secrets:
+            return '200 OK', await self._submit_app(
+                _form_value(body, 'client_id').strip(), _form_value(body, 'client_secret').strip())
+        if method == 'POST' and path == '/submit':
+            return '200 OK', await self._submit(_form_value(body, 'address'))
+        return '404 Not Found', _page('<p>Not found. <a href="/">Back</a></p>')
+
+    def _start_page(self):
+        if not self.session.has_client:
+            return self._app_page()
+        if self.session.auth_error_code == 'invalid_client':
+            return self._app_page("Spotify rejected the app's Client ID or Secret ({}). "
+                                  "Check them in the dashboard and enter them again.".format(self.session.auth_error))
+        return self._form_page()
+
+    def _app_page(self, error=None, client_id='', client_secret=''):
         if error:
             message = '<p class="err">{}</p>'.format(_escape(error))
+        else:
+            message = '<p>Connect this Presto to your Spotify account. First, enter your Spotify app\'s details.</p>'
+        return _page(_APP_FORM.format(
+            message=message,
+            redirect_uri=_escape(self.session.redirect_uri),
+            client_id=_escape(client_id),
+            client_secret=_escape(client_secret),
+        ))
+
+    async def _submit_app(self, client_id, client_secret):
+        if self.done:
+            return _page(_DONE)
+        if self.busy:
+            return self._app_page("Already checking, please wait a moment and reload.", client_id, client_secret)
+        self.busy = True
+        try:
+            error = await self.session.set_client(client_id, client_secret)
+        finally:
+            self.busy = False
+        if error:
+            return self._app_page("Spotify rejected these details: {}. Check them and try again.".format(error),
+                                  client_id, client_secret)
+        return self._form_page(ok="Spotify accepted the app's details. Now log in:")
+
+    def _form_page(self, error=None, ok=None):
+        if error:
+            message = '<p class="err">{}</p>'.format(_escape(error))
+        elif ok:
+            message = '<p class="ok">{}</p>'.format(_escape(ok))
         elif self.session.auth_error == NO_LOGIN:
             message = '<p>Connect this Presto to your Spotify account in three steps:</p>'
         else:
             message = '<p>Spotify no longer accepts this Presto\'s login. Renew it in three steps:</p>'
-        return _PAGE.format(body=_FORM.format(
+        return _page(_FORM.format(
             message=message,
             authorize_url=_escape(self.authorize_url),
             redirect_uri=_escape(self.session.redirect_uri),
+            change_app='' if self.session.client_in_secrets else _CHANGE_APP,
         ))
 
     async def _submit(self, address):
         if self.done:
-            return _PAGE.format(body=_DONE)
+            return _page(_DONE)
         if self.busy:
             return self._form_page("Already checking a login, please wait a moment and reload.")
 
@@ -155,16 +181,7 @@ class Relogin:
                                    "The address may have expired or already been used, so start again from step 1."
                                    .format(error))
         self.done = True
-        return _PAGE.format(body=_DONE)
-
-
-def _form_value(body, name):
-    """Extracts one field from an application/x-www-form-urlencoded body."""
-    for pair in body.split('&'):
-        key, _, value = pair.partition('=')
-        if key == name:
-            return unquote(value.replace('+', ' '))
-    return ''
+        return _page(_DONE)
 
 
 def _query_params(address):
@@ -177,7 +194,3 @@ def _query_params(address):
         if key:
             params[key] = unquote(value)
     return params
-
-
-def _escape(text):
-    return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')

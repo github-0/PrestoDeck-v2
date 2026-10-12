@@ -59,7 +59,8 @@ class Device:
 
 
 TOKEN_ENDPOINT = "https://accounts.spotify.com/api/token"
-# Refresh token obtained on the device (re-login or rotation); overrides the one in secrets.py
+# Refresh token obtained on the device (re-login or rotation); overrides the one in secrets.py.
+# Also holds the Client ID and Secret entered on the login page, used when secrets.py has none.
 TOKEN_FILE = "spotify_token.json"
 # Must match a Redirect URI registered for the app in the Spotify developer dashboard
 DEFAULT_REDIRECT_URI = "http://127.0.0.1:8080"
@@ -78,15 +79,21 @@ class Session:
         self.auth_error_code = None
         self._secrets_refresh_token = credentials.get('refresh_token') or None
         self.credentials['refresh_token'] = self._secrets_refresh_token
-        self._load_saved_refresh_token()
-        if not self.credentials['refresh_token']:
+        # Client ID and Secret in secrets.py win; otherwise they come from the login page via TOKEN_FILE
+        self.client_in_secrets = bool(credentials.get('client_id') and credentials.get('client_secret'))
+        self._load_saved()
+        if not self.has_client or not self.credentials['refresh_token']:
             self.auth_error = NO_LOGIN
 
     @property
     def redirect_uri(self):
         return self.credentials.get('redirect_uri', DEFAULT_REDIRECT_URI)
 
-    def _load_saved_refresh_token(self):
+    @property
+    def has_client(self):
+        return bool(self.credentials.get('client_id') and self.credentials.get('client_secret'))
+
+    def _load_saved(self):
         # The saved token is only used while secrets.py still holds the token it replaced,
         # so pasting fresh credentials into secrets.py always takes precedence.
         try:
@@ -100,15 +107,41 @@ class Session:
         if saved.get('replaces') == self._secrets_refresh_token and saved.get('refresh_token'):
             self.credentials['refresh_token'] = saved['refresh_token']
             print("Using refresh token saved in", TOKEN_FILE)
+        if not self.client_in_secrets and 'client_id' in saved:
+            self.credentials['client_id'] = saved['client_id']
+            self.credentials['client_secret'] = saved['client_secret']
+            print("Using Client ID and Secret saved in", TOKEN_FILE)
 
     def save_refresh_token(self, refresh_token):
         self.credentials['refresh_token'] = refresh_token
+        data = {'refresh_token': refresh_token, 'replaces': self._secrets_refresh_token}
+        if not self.client_in_secrets:
+            data['client_id'] = self.credentials['client_id']
+            data['client_secret'] = self.credentials['client_secret']
         try:
             with open(TOKEN_FILE, 'w') as f:
-                json.dump({'refresh_token': refresh_token, 'replaces': self._secrets_refresh_token}, f)
+                json.dump(data, f)
             print("Saved refresh token to", TOKEN_FILE)
         except OSError as e:
             print("Failed to save refresh token:", e)
+
+    async def set_client(self, client_id, client_secret):
+        """Checks a Client ID and Secret with Spotify and uses them for the next login, which saves them.
+        Returns None on success, otherwise an error message."""
+        params = dict(grant_type="client_credentials", client_id=client_id, client_secret=client_secret)
+        try:
+            status, text = await asyncio.wait_for(self._post_token_request(params), REQUEST_TIMEOUT)
+        except Exception as e:
+            return "Could not reach Spotify: {}".format(e)
+        if status >= 400:
+            print("Spotify rejected the Client ID and Secret: HTTP {} {}".format(status, text))
+            error, description = _token_error(text)
+            return description or error or "HTTP {}".format(status)
+        self.credentials['client_id'] = client_id
+        self.credentials['client_secret'] = client_secret
+        if self.auth_error_code == 'invalid_client':
+            self.auth_error_code = None
+        return None
 
     async def get(self, url):
         return await self._execute('get', url)
