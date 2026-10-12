@@ -12,6 +12,7 @@ from touch import Button
 
 from applications.spotify.spotify_client import NO_LOGIN, Session, SpotifyWebApiClient, SpotifyWebApiError
 from base import BaseApp
+from vectortext import VectorText
 import wifi_setup
 try:
     import secrets
@@ -54,23 +55,6 @@ LED_DARK_THRESHOLD = 60
 LED_MIN_BRIGHTNESS = 34
 # RGB colour used instead when the cover is black or has no art.
 LED_MIN_COLOR = (50, 30, 10)
-
-_TRANSLITERATE = {
-    'ä':'a','ö':'o','å':'a','ü':'u','ë':'e','ï':'i','ÿ':'y',
-    'Ä':'A','Ö':'O','Å':'A','Ü':'U','Ë':'E','Ï':'I',
-    'á':'a','à':'a','â':'a','ã':'a','Á':'A','À':'A','Â':'A','Ã':'A',
-    'é':'e','è':'e','ê':'e','É':'E','È':'E','Ê':'E',
-    'í':'i','ì':'i','î':'i','Í':'I','Ì':'I','Î':'I',
-    'ó':'o','ò':'o','ô':'o','õ':'o','ø':'o','Ó':'O','Ò':'O','Ô':'O','Õ':'O','Ø':'O',
-    'ú':'u','ù':'u','û':'u','Ú':'U','Ù':'U','Û':'U',
-    'ñ':'n','Ñ':'N','ç':'c','Ç':'C','ß':'ss','æ':'ae','Æ':'AE','œ':'oe','Œ':'OE',
-}
-
-def transliterate(text):
-    result = []
-    for ch in text:
-        result.append(_TRANSLITERATE.get(ch, ch if ord(ch) < 128 else ' '))
-    return ''.join(result)
 
 class State:
     """Tracks the current state of the Spotify app including playback and UI controls."""
@@ -176,24 +160,27 @@ class Spotify(BaseApp):
     """Main Spotify app managing playback controls, track display, and UI interactions."""
     def __init__(self):
         super().__init__(ambient_light=True, full_res=True, layers=2)
+        self.led_hold = None  # the colour hold_led_color() holds the LEDs at, or None while they follow the screen
 
         self.display.set_layer(0)
         icon = pngdec.PNG(self.display)
         icon.open_file("applications/spotify/icon.png")
         icon.decode(self.center_x - icon.get_width()//2, self.center_y - icon.get_height()//2 - 20)
         self.presto.update()
+        # Startup texts are centered in the space between the icon and the bottom of the screen
+        self.startup_text_y = (self.center_y - 20 + icon.get_height()//2 + self.height) // 2
 
-        self.display.set_font("sans")
+        self.text = VectorText(self.display)
+        self.track_text = (None, "", "")  # track_key() of the track whose name and artists are prepared, and them
         self.display.set_layer(1)
-        text = "Ladataan bitit"
-        self.display_text(text, (self.center_x - self.display.measure_text(text, scale=1)//2, self.height - 80), thickness=2)
+        self.draw_centered("Connecting to Wi-Fi", self.startup_text_y, 29, self.colors.WHITE)
         self.presto.update()
 
         asyncio.get_event_loop().run_until_complete(self.connect_wifi())
 
         self.clear(1)
-        text = "Haetaan biisit"
-        self.display_text(text, (self.center_x - self.display.measure_text(text, scale=1)//2, self.height - 80), thickness=2)
+        self.draw_centered("Loading Spotify", self.startup_text_y, 29, self.colors.WHITE)
+        self.presto.update()
         self.spotify_client = self.get_spotify_client()
         # JPEG decoder
         self.j = jpegdec.JPEG(self.display)
@@ -267,21 +254,18 @@ class Spotify(BaseApp):
         """Shows a message below the PrestoDeck icon on the startup screen."""
         self.clear(1)
         self.display.set_layer(1)
-        self.display.set_thickness(2)
-        self.draw_centered(title, self.height - 110, 0.8, self.colors.WHITE)
-        self.display.set_thickness(1)
+        title_y = self.startup_text_y - 15 * len(lines)  # the title and lines centered together
+        self.draw_centered(title, title_y, 24, self.colors.WHITE)
         for i, line in enumerate(lines):
-            self.draw_centered(line, self.height - 75 + 30 * i, 0.6, self.colors.WHITE)
+            self.draw_centered(line, title_y + 35 + 30 * i, 18, self.colors.WHITE)
         self.presto.update()
 
     def show_message(self, title, subtitle):
         """Shows a short message in the middle of an otherwise empty screen."""
         self.clear()
         self.display.set_layer(1)
-        self.display.set_thickness(2)
-        self.draw_centered(title, self.center_y - 20, 1, self.colors.WHITE)
-        self.display.set_thickness(1)
-        self.draw_centered(subtitle, self.center_y + 25, 0.8, self.colors.GRAY)
+        self.draw_centered(title, self.center_y - 20, 29, self.colors.WHITE)
+        self.draw_centered(subtitle, self.center_y + 25, 24, self.colors.GRAY)
         self.presto.update()
 
     async def wait_for_tap(self, until=None):
@@ -321,47 +305,46 @@ class Spotify(BaseApp):
         internet. The phone's sign-in window always uses the Wi-Fi."""
         self.clear()
         self.display.set_layer(1)
-        self.display.set_thickness(2)
-        self.draw_centered("Wi-Fi setup", 40, 1, self.colors.WHITE)
-        self.display.set_thickness(1)
+        self.draw_centered("Wi-Fi setup", 40, 29, self.colors.WHITE)
 
         left_x, right_x = self.width // 4, self.width * 3 // 4
         column = self.width // 2 - 20
         steps_y = 90  # first line of both steps' headings
         bottom = self.draw_qr_code(setup.join_qr_text, steps_y + 55, left_x, 170) or steps_y + 55
-        self.draw_centered("Password:", bottom + 60, 0.6, self.colors.GRAY, left_x, column)
-        self.draw_centered("or, with mobile data off,", steps_y + 90, 0.6, self.colors.GRAY, right_x, column)
-        self.draw_centered("open", steps_y + 115, 0.6, self.colors.GRAY, right_x, column)
-        self.draw_centered("Tap the screen to cancel", self.height - 22, 0.6, self.colors.GRAY)
-        # The steps, and what has to be read or typed: larger and bold
-        self.display.set_thickness(2)
-        self.draw_centered("1. Scan to join", steps_y, 0.8, self.colors.WHITE, left_x, column)
-        self.draw_centered("the network", steps_y + 35, 0.8, self.colors.WHITE, left_x, column)
-        self.draw_centered("2. Tap \"Sign in\"", steps_y, 0.8, self.colors.WHITE, right_x, column)
-        self.draw_centered("on your phone", steps_y + 35, 0.8, self.colors.WHITE, right_x, column)
-        self.draw_centered(setup.url, steps_y + 145, 0.7, self.colors.WHITE, right_x, column)
-        self.draw_centered(wifi_setup.AP_SSID, bottom + 30, 0.7, self.colors.WHITE, left_x, column)
-        self.draw_centered(setup.password, bottom + 95, 1, self.colors.WHITE, left_x, column)
-        self.display.set_thickness(1)
+        self.draw_centered("Password:", bottom + 60, 18, self.colors.GRAY, left_x, column)
+        self.draw_centered("or, with mobile", steps_y + 90, 18, self.colors.GRAY, right_x, column)
+        self.draw_centered("data off, open", steps_y + 115, 18, self.colors.GRAY, right_x, column)
+        self.draw_centered("Tap the screen to cancel", self.height - 22, 18, self.colors.GRAY)
+        # The steps, and what has to be read or typed: larger
+        self.draw_centered("1. Scan to join", steps_y, 24, self.colors.WHITE, left_x, column)
+        self.draw_centered("the network", steps_y + 35, 24, self.colors.WHITE, left_x, column)
+        self.draw_centered("2. Tap \"Sign in\"", steps_y, 24, self.colors.WHITE, right_x, column)
+        self.draw_centered("on your phone", steps_y + 35, 24, self.colors.WHITE, right_x, column)
+        self.draw_centered(setup.url, steps_y + 145, 21, self.colors.WHITE, right_x, column)
+        self.draw_centered(wifi_setup.AP_SSID, bottom + 30, 24, self.colors.WHITE, left_x, column)
+        self.draw_centered(setup.password, bottom + 90, 24, self.colors.WHITE, left_x, column)
         self.presto.update()
 
     async def confirm_wifi_setup(self):
         """Asks whether to start Wi-Fi setup. If not, goes back to the player."""
-        self.show_message("Start Wi-Fi setup?", "The player stops during setup")
-        button_y, button_h = self.height - 140, 80
+        self.clear()
+        self.display.set_layer(1)
+        # The question and the buttons below it, centered together on the screen
+        title_y = self.center_y - 60
+        button_y, button_h = title_y + 50, 80
+        self.draw_centered("Start Wi-Fi setup?", title_y, 29, self.colors.WHITE)
         self.display.set_pen(self.display.create_pen(40, 40, 40))
         for x in (20, self.center_x + 10):
             self.display.rectangle(x, button_y, self.center_x - 30, button_h)
-        self.display.set_thickness(2)
-        self.draw_centered("Cancel", button_y + button_h // 2, 0.8, self.colors.WHITE,
+        self.draw_centered("Cancel", button_y + button_h // 2, 24, self.colors.WHITE,
                            self.width // 4, self.center_x - 40)
-        self.draw_centered("Start setup", button_y + button_h // 2, 0.8, self.colors.WHITE,
+        self.draw_centered("Start setup", button_y + button_h // 2, 24, self.colors.WHITE,
                            self.width * 3 // 4, self.center_x - 40)
         self.presto.update()
 
         while True:
             x, y = await self.wait_for_tap()
-            if y >= button_y:  # ignore taps above the buttons
+            if button_y <= y < button_y + button_h:  # ignore taps outside the buttons
                 break
         if x >= self.center_x:
             await self.run_wifi_setup()
@@ -376,14 +359,9 @@ class Spotify(BaseApp):
         self.nothing_playing = False
         self.notice_text = None
         self.notice_shown_at = None
-    
-    def display_text(self, text, position, color=65535, scale=1, thickness=None):
-        if thickness:
-            self.display.set_thickness(2)
-        x,y = position
-        self.display.set_pen(color)
-        self.display.text(text, x, y, scale=scale)
-        self.presto.update()
+        self.polled = False          # the first poll's result is on screen, so display_loop can start drawing
+        self.art_changed = False     # new album art on layer 0 that display_loop hasn't shown yet
+        self.track_shown_at = None   # when the current track's name started showing
 
     def get_spotify_client(self):
         credentials = getattr(secrets, 'SPOTIFY_CREDENTIALS', None) or {}
@@ -411,53 +389,50 @@ class Spotify(BaseApp):
             print("Failed to start re-login page:", e)
         self.show_relogin_screen(reason, url)
 
-    def draw_centered(self, text, y, scale, color, center_x=None, max_width=None):
-        """Draws text centered on center_x (default: the screen's center), cropped to max_width."""
+    def draw_centered(self, text, y, px, color, center_x=None, max_width=None):
+        """Draws text of em size px centered on center_x (default: the screen's center), the middle of
+        its capitals at y, cropped to max_width."""
         center_x = self.center_x if center_x is None else center_x
-        text = self.fit_text(text, scale, max_width or self.width - 40)
+        text = self.fit_text(self.text.clean(text), px, max_width or self.width - 40)
         self.display.set_pen(color)
-        self.display.text(text, center_x - self.display.measure_text(text, scale=scale)//2, y, scale=scale)
+        self.text.draw(text, center_x - self.text.width(text, px) // 2, y, px)
 
     def show_relogin_screen(self, reason, url):
         """Shows why Spotify stopped working and a QR code for the re-login page."""
         self.clear()
         self.display.set_layer(1)
-        self.display.set_thickness(2)
         if reason == NO_LOGIN:
             title = "Connect to Spotify"
         elif self.spotify_client.session.auth_error_code == 'invalid_client':
             title = "Spotify app rejected"
         else:
             title = "Spotify login expired"
-        self.draw_centered(title, 40, 1, self.colors.WHITE)
-        self.display.set_thickness(1)
-        self.draw_centered(reason, 75, 0.6, self.colors.GRAY)
+        self.draw_centered(title, 40, 29, self.colors.WHITE)
+        self.draw_centered(reason, 75, 18, self.colors.GRAY)
 
         qr_bottom = self.draw_qr_code(url, 110) if url else None
         if qr_bottom:
-            self.draw_centered("Scan to log in (phone on same Wi-Fi)", qr_bottom + 35, 0.7, self.colors.WHITE)
-            self.draw_centered(url, qr_bottom + 70, 0.8, self.colors.WHITE)
+            self.draw_centered("Scan to log in (phone on same Wi-Fi)", qr_bottom + 35, 21, self.colors.WHITE)
+            self.draw_centered(url, qr_bottom + 70, 24, self.colors.WHITE)
         elif url:
-            self.draw_centered("To log in, open this on a phone", 180, 0.8, self.colors.WHITE)
-            self.draw_centered("on the same Wi-Fi:", 220, 0.8, self.colors.WHITE)
-            self.draw_centered(url, 270, 1, self.colors.WHITE)
+            self.draw_centered("To log in, open this on a phone", 180, 24, self.colors.WHITE)
+            self.draw_centered("on the same Wi-Fi:", 220, 24, self.colors.WHITE)
+            self.draw_centered(url, 270, 29, self.colors.WHITE)
         else:
-            self.draw_centered("Run adhoc/generate_token.sh", 200, 0.8, self.colors.WHITE)
-            self.draw_centered("and update secrets.py", 240, 0.8, self.colors.WHITE)
+            self.draw_centered("Run adhoc/generate_token.sh", 200, 24, self.colors.WHITE)
+            self.draw_centered("and update secrets.py", 240, 24, self.colors.WHITE)
         self.presto.update()
 
     def show_app_rejected_screen(self, reason):
         """Shown when Spotify rejects the app's Client ID or Client Secret."""
         self.clear()
         self.display.set_layer(1)
-        self.display.set_thickness(2)
-        self.draw_centered("Spotify app rejected", 40, 1, self.colors.WHITE)
-        self.display.set_thickness(1)
-        self.draw_centered(reason, 75, 0.6, self.colors.GRAY)
-        self.draw_centered("Check client_id and client_secret", 180, 0.8, self.colors.WHITE)
-        self.draw_centered("in secrets.py, and that the app is", 220, 0.8, self.colors.WHITE)
-        self.draw_centered("enabled in the Spotify dashboard.", 260, 0.8, self.colors.WHITE)
-        self.draw_centered("Then restart the Presto.", 320, 0.8, self.colors.WHITE)
+        self.draw_centered("Spotify app rejected", 40, 29, self.colors.WHITE)
+        self.draw_centered(reason, 75, 18, self.colors.GRAY)
+        self.draw_centered("Check client_id and client_secret", 180, 24, self.colors.WHITE)
+        self.draw_centered("in secrets.py, and that the app is", 220, 24, self.colors.WHITE)
+        self.draw_centered("enabled in the Spotify dashboard.", 260, 24, self.colors.WHITE)
+        self.draw_centered("Then restart the Presto.", 320, 24, self.colors.WHITE)
         self.presto.update()
 
     def draw_qr_code(self, text, top, center_x=None, box=200):
@@ -511,6 +486,7 @@ class Spotify(BaseApp):
         self.presto.update()
         loop = asyncio.get_event_loop()
         loop.create_task(self.touch_handler_loop())
+        loop.create_task(self.poll_loop())
         loop.create_task(self.display_loop())
 
     def setup_buttons(self):
@@ -582,6 +558,7 @@ class Spotify(BaseApp):
         """Starts the app's event loops."""
         loop = asyncio.get_event_loop()
         loop.create_task(self.touch_handler_loop())
+        loop.create_task(self.poll_loop())
         loop.create_task(self.display_loop())
         loop.run_forever()
 
@@ -597,14 +574,15 @@ class Spotify(BaseApp):
                     if not self.showing_controls:  # the startup controls already show every icon
                         self.feedback_button_ref = button
                         self.feedback_icon_name = button.icon
-                        self.feedback_shown_at = time.time()
+                        self.feedback_shown_at = time.ticks_ms()
                         self.show_button_feedback()
                         self.presto.update()
                     asyncio.create_task(self.press_button(button))
                     break
-            
-            # Wait here until the user stops touching the screen
+
+            # Wait here until the user stops touching the screen, letting the other tasks run meanwhile
             while self.touch.state:
+                await asyncio.sleep_ms(10)
                 self.touch.poll()
 
             await asyncio.sleep_ms(1)
@@ -643,15 +621,10 @@ class Spotify(BaseApp):
 
     def show_status(self, text):
         """Draws a message in a bar at the top of the screen."""
-        scale = 0.7
-        text = self.fit_text(transliterate(text), scale, self.width - 40)
         self.display.set_layer(1)
-        self.display.set_font("sans")
         self.display.set_pen(self.display.create_pen(40, 40, 40))
         self.display.rectangle(0, 0, self.width, 44)
-        self.display.set_thickness(2)
-        self.display.set_pen(self.colors.WHITE)
-        self.display.text(text, (self.width - self.display.measure_text(text, scale=scale)) // 2, 22, scale=scale)
+        self.draw_centered(text, 22, 21, self.colors.WHITE)
 
     def reconnect_wifi_if_down(self):
         """Starts a Wi-Fi reconnect if the connection is lost. Doesn't wait for it to finish."""
@@ -667,40 +640,47 @@ class Spotify(BaseApp):
 
     def hold_led_color(self, rgb):
         """Holds all LEDs at rgb, or lets them follow the screen again if rgb is None."""
-        if not LED_BRIGHTNESS_ENABLED:
+        # Turning auto_ambient on again restarts its smoothing from black, which dims the LEDs for a moment
+        if not LED_BRIGHTNESS_ENABLED or rgb == self.led_hold:
             return
+        self.led_hold = rgb
         if rgb:
-            # Pre-write the colour before disabling auto_ambient, so the LEDs don't blink
+            # Pre-write the colour before disabling auto_ambient, so the LEDs don't blink. Then write it again:
+            # the firmware may have been adding the screen's colours to these values (~2 ms per pass).
             for i in range(7):
                 self.presto.set_led_rgb(i, *rgb)
             self.presto.auto_ambient_leds(False)
+            time.sleep_ms(5)
+            for i in range(7):
+                self.presto.set_led_rgb(i, *rgb)
         else:
             self.presto.auto_ambient_leds(True)
 
-    async def update_album_art(self, first_try):
-        """Fetches and shows the current track's album art. Returns True if the screen changed."""
+    async def update_album_art(self, track, first_try):
+        """Fetches and draws a track's album art, and sets art_changed if the screen changed."""
         self.art_attempt_at = time.time()
-        if not album_image_url(self.state.track):
+        if not album_image_url(track):
             self.art_error = "This track has no album art"
             img, rgb = None, None
         else:
             self.art_error = "Can't load album art, retrying..."
-            img, rgb = await get_album_cover(self.state.track)
+            img, rgb = await get_album_cover(track)
+            if self.state.exit:
+                return  # the player stopped meanwhile, e.g. for Wi-Fi setup, so leave the screen alone
         if self.show_image(img):
-            self.art_key = track_key(self.state.track)
+            self.art_key = track_key(track)
             self.art_error = None
             if rgb is not None:
                 led_rgb = dark_led_color(rgb)
                 print(f"LED sample RGB={rgb} br={perceived_brightness(*rgb)} hold={led_rgb}")
                 self.hold_led_color(led_rgb)
-            return True
-        if first_try:
+            self.art_changed = True
+        elif first_try:
             # Don't leave the previous track's cover behind the new track's name.
             # The screen is now black, so keep the LEDs at their minimum.
             self.clear(0)
             self.hold_led_color(LED_MIN_COLOR)
-            return True
-        return False
+            self.art_changed = True
 
     def show_image(self, img, minimized=False):
         """Displays an album cover image on the screen. Returns True if it was drawn."""
@@ -720,13 +700,13 @@ class Spotify(BaseApp):
             print("Failed to load image:", e)
             return False
         
-    def fit_text(self, text, scale, max_width):
-        """Trims text to fit within max_width at the given scale, appending '...' if cropped."""
-        if self.display.measure_text(text, scale=scale) <= max_width:
+    def fit_text(self, text, px, max_width):
+        """Trims a cleaned text to fit within max_width at em size px, appending '...' if cropped."""
+        if self.text.width(text, px) <= max_width:
             return text
         while len(text) > 0:
             text = text[:-1]
-            if self.display.measure_text(text + "...", scale=scale) <= max_width:
+            if self.text.width(text + "...", px) <= max_width:
                 return text + "..."
         return "..."
 
@@ -735,49 +715,42 @@ class Spotify(BaseApp):
         if not self.state.track:
             return
 
-        max_width = self.width - 40  # 20px margin each side within the full-width box
+        name_px = 44
+        artist_px = 29
+        padding = 16
 
-        track_name = transliterate(self.state.track.get("name", ""))
-        track_name = self.fit_text(track_name, 1.5, max_width)
-
-        artists = transliterate(", ".join([a.get("name", "") for a in self.state.track.get("artists", [])]))
-        artists = self.fit_text(artists, 1.0, max_width)
+        # Cleaning and fitting take a while for some scripts, and the band is redrawn on every tap
+        key = track_key(self.state.track)
+        if self.track_text[0] != key:
+            max_width = self.width - 40  # 20px margin each side within the full-width box
+            track_name = self.text.clean(self.state.track.get("name", ""))
+            artists = self.text.clean(", ".join([a.get("name", "") for a in self.state.track.get("artists", [])]))
+            self.text.prepare(track_name, artists)
+            self.track_text = (key, self.fit_text(track_name, name_px, max_width),
+                               self.fit_text(artists, artist_px, max_width))
+        _, track_name, artists = self.track_text
+        self.text.prepare(track_name, artists)  # another screen's text may have replaced the font meanwhile
 
         self.display.set_layer(1)
-        self.display.set_font("sans")
 
-        name_scale = 1.5
-        artist_scale = 1.0
-        padding = 16
-        font_height = 16  # approximate px height of font at scale=1
-
-        name_w = self.display.measure_text(track_name, scale=name_scale)
-        name_x = (self.width - name_w) // 2
+        name_x = (self.width - self.text.width(track_name, name_px)) // 2
         name_y = self.center_y - 30
-
-        artist_w = self.display.measure_text(artists, scale=artist_scale)
-        artist_x = (self.width - artist_w) // 2
+        artist_x = (self.width - self.text.width(artists, artist_px)) // 2
         artist_y = self.center_y + 15
 
-        # Draw full-width background band
-        # Top accounts for font height above the y baseline
-        box_y = name_y - int(font_height * name_scale) - padding
-        box_h = artist_y + int(font_height * artist_scale) + padding - box_y
+        # Full-width background band. The y's are the middle of the capitals: allow 0.55 em above for
+        # accents and CJK characters, and below for descenders.
+        box_y = name_y - int(0.55 * name_px) - padding
+        box_h = artist_y + int(0.55 * artist_px) + padding - box_y
         self.display.set_pen(self.display.create_pen(*FROST_COLOR))
         frost_rect_dark(self.display, 0, box_y, self.width, box_h)
 
-        # Draw text on top of box
-        self.display.set_thickness(3)
-        self.display.set_pen(self.colors._BLACK)
-        self.display.text(track_name, name_x + 2, name_y + 2, scale=name_scale)
-        self.display.set_pen(self.colors.WHITE)
-        self.display.text(track_name, name_x, name_y, scale=name_scale)
-
-        self.display.set_thickness(2)
-        self.display.set_pen(self.colors._BLACK)
-        self.display.text(artists, artist_x + 2, artist_y + 2, scale=artist_scale)
-        self.display.set_pen(self.colors.WHITE)
-        self.display.text(artists, artist_x, artist_y, scale=artist_scale)
+        # Text with a shadow on top of the band
+        for text, x, y, px in ((track_name, name_x, name_y, name_px), (artists, artist_x, artist_y, artist_px)):
+            self.display.set_pen(self.colors._BLACK)
+            self.text.draw(text, x + 2, y + 2, px)
+            self.display.set_pen(self.colors.WHITE)
+            self.text.draw(text, x, y, px)
 
     def show_button_feedback(self):
         """Draws the feedback icon centered in the pressed button's zone."""
@@ -790,10 +763,50 @@ class Spotify(BaseApp):
         center_y = self.center_y if button.name in ("Previous", "Next") else None
         button.draw_icon(self.feedback_icon_name, center_y)
 
+    async def poll_loop(self):
+        """Polls Spotify and draws new album art on layer 0. Kept apart from display_loop, which would
+        otherwise wait for every request and leave e.g. a tapped button's icon up until it finished."""
+        state = self.state  # restart_player() replaces self.state, so a stopped loop can't come back to life
+        while not state.exit:
+            if not state.latest_fetch or time.time() - state.latest_fetch > SPOTIFY_POLL_INTERVAL:
+                state.latest_fetch = time.time()
+                result, reached = await fetch_state(self.spotify_client)
+                gc.collect()  # free SSL context before opening next connection
+                if state.exit:
+                    return
+                auth_error = self.spotify_client.session.auth_error
+                if auth_error:
+                    state.exit = True  # stop the other loops so nothing redraws over the message
+                    await self.start_relogin(auth_error)
+                    return
+                self.failed_polls = 0 if reached else self.failed_polls + 1
+                if not reached:
+                    self.reconnect_wifi_if_down()
+                self.nothing_playing = reached and not result
+                if result:
+                    device_id, track, is_playing, shuffle, repeat = result
+                    if device_id:
+                        self.spotify_client.session.device_id = device_id
+                    # Load the new track's art before switching to it, so its name appears together with its art
+                    if track.get('id') != (state.track or {}).get('id'):
+                        await self.update_album_art(track, first_try=True)
+                        if state.exit:
+                            return
+                        self.track_shown_at = time.time()
+                    state.track, state.is_playing, state.shuffle, state.repeat = track, is_playing, shuffle, repeat
+                self.polled = True
+
+            elif (state.track and track_key(state.track) != self.art_key and
+                    time.time() - self.art_attempt_at >= ART_RETRY_INTERVAL):
+                await self.update_album_art(state.track, first_try=False)
+
+            gc.collect()
+            await asyncio.sleep_ms(200)
+
     async def display_loop(self):
-        """Periodically updates the display with the latest track info."""
+        """Redraws layer 1 (track name, controls, tap icon, status) whenever what it shows changes.
+        Never waits for the network, so things disappear on time."""
         prev_state = None
-        track_shown_at = None
         was_showing_info = False
         was_showing_feedback = False
         controls_pending = True  # show the controls once the first track name has gone
@@ -802,52 +815,20 @@ class Spotify(BaseApp):
         prev_status = None
 
         while not self.state.exit:
-            await asyncio.sleep(0)  # yield before fetch so touch events are processed first
-
             if self.wifi_setup_requested:
                 self.wifi_setup_requested = False
-                self.state.exit = True  # stop both loops so nothing redraws over the question
+                self.state.exit = True  # stop the other loops so nothing redraws over the question
                 await self.confirm_wifi_setup()
                 return
 
-            if not self.state.latest_fetch or time.time() - self.state.latest_fetch > SPOTIFY_POLL_INTERVAL:
-                self.state.latest_fetch = time.time()
-                result, reached = await fetch_state(self.spotify_client)
-                gc.collect()  # free SSL context before opening next connection
-                auth_error = self.spotify_client.session.auth_error
-                if auth_error:
-                    self.state.exit = True  # stop both loops so nothing redraws over the message
-                    await self.start_relogin(auth_error)
-                    return
-                self.failed_polls = 0 if reached else self.failed_polls + 1
-                if not reached:
-                    self.reconnect_wifi_if_down()
-                self.nothing_playing = reached and not result
-                if result:
-                    device_id, self.state.track, self.state.is_playing, self.state.shuffle, self.state.repeat = result
-                    if device_id:
-                        self.spotify_client.session.device_id = device_id
-
-            await asyncio.sleep(0)
-
-            track_changed = (
-                not prev_state or
-                (prev_state.track or {}).get('id') != (self.state.track or {}).get('id')
-            )
-
-            art_changed = False
-            if track_changed and self.state.track:
-                art_changed = await self.update_album_art(first_try=True)
-                track_shown_at = time.time()
-            elif (self.state.track and track_key(self.state.track) != self.art_key and
-                    time.time() - self.art_attempt_at >= ART_RETRY_INTERVAL):
-                art_changed = await self.update_album_art(first_try=False)
-
-            await asyncio.sleep(0)
+            if not self.polled:  # keep the startup screen until there's something to show
+                await asyncio.sleep_ms(50)
+                continue
 
             now = time.time()
-            showing_info = track_shown_at is not None and now - track_shown_at < TRACK_INFO_DURATION
-            showing_feedback = self.feedback_shown_at is not None and now - self.feedback_shown_at < BUTTON_FEEDBACK_DURATION
+            showing_info = self.track_shown_at is not None and now - self.track_shown_at < TRACK_INFO_DURATION
+            showing_feedback = (self.feedback_shown_at is not None and
+                                time.ticks_diff(time.ticks_ms(), self.feedback_shown_at) < BUTTON_FEEDBACK_DURATION * 1000)
             if controls_pending and was_showing_info and not showing_info:
                 controls_pending = False
                 controls_shown_at = now
@@ -855,9 +836,10 @@ class Spotify(BaseApp):
             self.showing_controls = showing_controls
             status = self.status_text(now)
 
-            if (art_changed or prev_state != self.state or showing_info != was_showing_info or
+            if (self.art_changed or prev_state != self.state or showing_info != was_showing_info or
                     showing_feedback != was_showing_feedback or showing_controls != was_showing_controls or
                     status != prev_status):
+                self.art_changed = False
                 self.clear(1)
                 if showing_info:
                     self.show_track_info()
@@ -877,8 +859,7 @@ class Spotify(BaseApp):
                 was_showing_controls = showing_controls
                 prev_status = status
 
-            gc.collect()
-            await asyncio.sleep_ms(200)
+            await asyncio.sleep_ms(50)
 
 def track_key(track):
     """Identifies a track. Local files have no id, so fall back to the URI."""

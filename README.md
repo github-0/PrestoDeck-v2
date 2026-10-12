@@ -8,8 +8,10 @@ Originally based on [fatihak/PrestoDeck](https://github.com/fatihak/PrestoDeck).
 - Track info shown briefly when the track changes
 - Added error handling and UI messages
 - Wi-Fi and Spotify setup is done with on-screen instructions and AP
+- Track names in European Latin, Greek, Cyrillic, Japanese, Chinese and Korean scripts
 
-Icons by [Icons8](https://icons8.com).
+Icons: [Icons8](https://icons8.com)\
+Fonts: [Noto Sans and Noto Sans CJK](https://notofonts.github.io/) (SIL Open Font License).
 
 # PrestoDeck
 
@@ -36,9 +38,12 @@ Download and install [Thonny](https://thonny.org/). You'll use it to copy files 
 1. Download PrestoDeck, either:
    - clone it: `git clone https://github.com/github-0/PrestoDeck-v2.git`, or
    - download the repository from GitHub.
-2. Connect the Presto to your computer with the USB-C cable.
+2. Connect the Presto to your computer with a USB-C cable.
 3. In Thonny, set the interpreter to **MicroPython (RP2040)**.
 4. In Thonny's Files panel, open the `src` folder, select everything in it, right-click and choose **Upload to /**.
+   - The `fonts` folder holds one file per script and is the largest part (1.7 MB). You can optionally leave out the scripts you don't need (except `latin.glyphs`). See [Text and fonts](#text-and-fonts).
+
+PrestoDeck is tested with Presto firmware v1.0.0.
 
 ### Step 3: Create a Spotify app
 1. Go to [Spotify for Developers](https://developer.spotify.com/dashboard/applications) and sign in.
@@ -53,6 +58,10 @@ Download and install [Thonny](https://thonny.org/). You'll use it to copy files 
    - unplug the Presto from the computer and power it from any USB power supply. 
 2. Presto shows **Wi-Fi not set up**. Follow on-screen instructions to set up Wi-Fi credentials. 
 3. Presto restarts, connects to your Wi-Fi and shows **Connect to Spotify**. Follow on-screen instructions to set up Spotify credentials.
+
+| Wi-Fi setup | Spotify setup |
+|---|---|
+| <img src="screenshots/presto-wifi-setup-screen.png" width="220"> | <img src="screenshots/presto-connect-spotify-screen.png" width="220"> |
 
 Done. Start playing something on Spotify on any device and it appears on the Presto.
 
@@ -72,9 +81,11 @@ For 5 seconds after startup, each touch area is shown with its icon, so you can 
 
 ### Limitations
 
-The display's text rendering can only support basic Latin letters (A–Z), so track and artist names are simplified:
-- Common accented letters lose their accents (ä → a, é → e, ñ → n, ß → ss, ...).
-- Anything else (Japanese, Cyrillic, emoji, and less common accented letters such as č or ł) is shown as a space, so a name written entirely in another alphabet appears blank.
+Track and artist names are shown in the scripts of the installed [font modules](#text-and-fonts): European Latin (incl. Vietnamese), Greek, Cyrillic, Japanese, Chinese (about 7,200 common characters, simplified and traditional) and Korean (the 2,350 common syllables).
+- Emoji are left out. "Fancy" letters such as 𝓐𝓷𝓰𝓮𝓵 are shown as plain letters.
+- Greek, Cyrillic, Korean and Japanese kana are spelled in Latin letters if their module isn't installed. So are the rare Korean syllables the module doesn't have.
+- Anything else (e.g. Arabic, Hebrew, Thai, rare Chinese characters) is shown as □.
+- Chinese and Japanese share one font, which uses the Japanese forms of the characters they have in common.
 
 ## 3. Maintenance
 
@@ -118,10 +129,10 @@ wsrv.nl receives the Spotify image URL of every track you play, but no Spotify l
 - [Spotify for Developers](https://developer.spotify.com/dashboard) to create the app and its Client ID/Secret. Spotify must keep the app enabled.
 - The `aiohttp` MicroPython package, if your firmware doesn't include it: `mpremote mip install aiohttp` (downloads it from micropython-lib).
 
-### How the LED colours work
+### How the LEDs work
 
-- **Ambient colours are computed on the Presto.** The firmware's `auto_ambient_leds` derives the LED colours from what's on screen. No online service is involved.
-- **The minimum brightness check (which guarantess that LEDS are never completely dark even with dark album art) uses wsrv.nl.** On each track change the Presto fetches a 1×1 PNG of the cover from wsrv.nl and computes its perceived brightness. Below `LED_DARK_THRESHOLD` it turns off the ambient mode and sets all LEDs to the cover's average colour, brightened to at least `LED_MIN_BRIGHTNESS` while keeping its hue (a black cover gets `LED_MIN_COLOR`).
+- **Ambient colours are computed on the Presto.** The firmware's `auto_ambient_leds` derives the LED colours from what's on screen. 
+- **The minimum brightness check, which guarantess that LEDS are never completely dark, uses wsrv.nl.** On each track change the Presto fetches a 1×1 PNG of the cover from wsrv.nl and computes its perceived brightness. Below `LED_DARK_THRESHOLD` it turns off the ambient mode and sets all LEDs to the cover's average colour, brightened to at least `LED_MIN_BRIGHTNESS` while keeping its hue (a black cover gets `LED_MIN_COLOR`).
 - If only the sample fetch fails, the check is skipped and the LEDs keep whatever the previous track set. If the cover itself fails, the LEDs switch to `LED_MIN_COLOR`.
 
 Settings in `src/applications/spotify/spotify.py`:
@@ -140,6 +151,25 @@ Wi-Fi setup starts when PrestoDeck can't connect during startup, or through the 
 The setup network has no internet, so phones might keep sending browser traffic over mobile data, where the setup page can't be reached. To avoid that, the Presto acts as a sign-in (captive) portal: it answers every DNS lookup with its own address and every page request with the setup page. The phone's internet check then gets the setup page instead of its expected answer, so the phone opens the page in its sign-in window, which always uses the Wi-Fi. 
 
 Wi-Fi credentials are saved in `wifi.json` on the Presto.
+
+### Text and fonts
+
+All text is drawn with the firmware's PicoVector vector fonts (Alright Fonts, `.af`), from the font modules in `src/fonts/`:
+
+| Module | Contents | Size |
+|---|---|---|
+| `latin.glyphs` (required) | European Latin, Vietnamese, punctuation, ★ ♪ □ | 41 KB |
+| `greek.glyphs` | Greek | 6 KB |
+| `cyrillic.glyphs` | Bulgarian, Ukrainian, Serbian, Russian... | 7 KB |
+| `kana.glyphs` | Japanese hiragana and katakana | 27 KB |
+| `hangul.glyphs` | Korean | 268 KB |
+| `han.glyphs` | Chinese characters (also used in Japanese) and CJK punctuation | 1.3 MB |
+
+Japanese needs both `kana` and `han`. Every module except `latin` can be left out, and a module is used if its file is on the Presto.
+
+PicoVector can only load a whole font file, and fonts with thousands of characters are too big for it. So for each screen the Presto copies just the characters it shows from the modules into a small `.af` file (a few KB) on a RAM disk, and loads that. Nothing is written to the Presto's flash.
+
+The modules are built from Noto Sans Medium and Noto Sans CJK JP Medium with `adhoc/build_fonts.py` (needs `pip install fonttools`), which also lists which characters each module has. The fonts are under the SIL Open Font License, see `src/fonts/OFL.txt`.
 
 ### Spotify tokens
 
