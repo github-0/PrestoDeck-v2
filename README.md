@@ -13,6 +13,8 @@ Originally based on [fatihak/PrestoDeck](https://github.com/fatihak/PrestoDeck).
 Icons: [Icons8](https://icons8.com)\
 Fonts: [Noto Sans and Noto Sans CJK](https://notofonts.github.io/) (SIL Open Font License).
 
+<img src="screenshots/pd.png" width="280">
+
 # PrestoDeck
 
 PrestoDeck is a Spotify music controller for the [Pimoroni Presto](https://collabs.shop/xbvgb2). It displays album cover art and the currently playing track, with touch controls for playback.
@@ -96,7 +98,7 @@ Spotify's refresh tokens expire after 180 days (as of 10/2026). When that happen
 
 | Presto screen | Refresh page (hosted on Presto) |
 |---|---|
-| <img src="screenshots/presto-relogin-screen.png" width="300"> | <img src="screenshots/relogin-web-page.png" width="250"> |
+| <img src="screenshots/presto-relogin-screen.png" width="250"> | <img src="screenshots/relogin-web-page.png" width="230"> |
 
 
 ### Other things which can break it
@@ -107,7 +109,7 @@ Spotify's refresh tokens expire after 180 days (as of 10/2026). When that happen
 ### Updating PrestoDeck
 Download the new version and upload the contents of `src` again as in [Step 2](#step-2-copy-prestodeck-to-the-presto). The Wi-Fi details and Spotify login saved on the Presto are kept.
 
----
+
 
 ## 4. Technical details
 
